@@ -1,7 +1,7 @@
 package nickel
 
 /*
-#cgo linux,amd64 LDFLAGS: -L./lib/linux_amd64/ -lnickel_lang -lm
+#cgo linux,amd64 LDFLAGS: ./lib/linux_amd64/libnickel_lang.a -lm
 
 #cgo CFLAGS: -I./include
 
