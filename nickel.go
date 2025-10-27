@@ -7,13 +7,24 @@ package nickel
 
 #include <nickel_lang.h>
 #include <malloc.h>
+
+extern uintptr_t traceCallback(void*, uint8_t*, uintptr_t);
+
+uintptr_t traceCallbackTrampoline(void* context, const uint8_t* buf, uintptr_t len);
 */
 import "C"
 
 import (
 	"encoding/json"
+	"io"
 	"runtime"
+	"sync"
 	"unsafe"
+)
+
+var (
+	contextTracerMutex sync.RWMutex
+	contextTracer = map[unsafe.Pointer]io.Writer{}
 )
 
 // Context is the main entry point.
@@ -47,6 +58,7 @@ type Error struct {
 	ptr *C.nickel_error
 }
 
+// Implement the Error interface for our Error type.
 func (e *Error) Error() string {
 	s := C.nickel_string_alloc()
 	defer C.nickel_string_free(s)
@@ -86,7 +98,7 @@ func new_err() *Error {
 	return err
 }
 
-
+// NewContext creates a new Context for storing global Nickel settings.
 func NewContext() *Context {
 	ctx := &Context {
 		ptr: C.nickel_context_alloc(),
@@ -94,11 +106,40 @@ func NewContext() *Context {
 
 	runtime.SetFinalizer(ctx, func(ctx *Context) {
 		C.nickel_context_free(ctx.ptr)
+		delete(contextTracer, unsafe.Pointer(ctx.ptr))
 	})
 
 	return ctx
 }
 
+// The trace callback takes a (i.e. nickel_context*) as its data pointer. This should
+// be okay, lifetime-wise, because if the  nickel_context_free
+// and then no one should be able to trigger more trace callbacks coming from that context.
+
+//export traceCallback
+func traceCallback(data unsafe.Pointer, buf *C.uint8_t, len C.uintptr_t) C.uintptr_t {
+	bytes := C.GoBytes(unsafe.Pointer(buf), C.int(len))
+
+	contextTracerMutex.RLock()
+	w := contextTracer[data]
+	contextTracerMutex.RUnlock()
+
+	// Swallow the error if the write callback fails, since it's just for tracing.
+	n, _ := w.Write(bytes)
+	return C.uintptr_t(n)
+}
+
+func (ctx *Context) SetTraceWriter(w io.Writer) {
+	contextTracerMutex.Lock()
+	contextTracer[unsafe.Pointer(ctx.ptr)] = w
+	contextTracerMutex.Unlock()
+	C.nickel_context_set_trace_callback(ctx.ptr, C.nickel_write_callback(C.traceCallbackTrampoline), nil, unsafe.Pointer(ctx.ptr))
+}
+
+// EvalDeep evaluates a Nickel program deeply.
+//
+// "Deeply" means that we recursively evaluate records and arrays. For
+// an alternative, see EvalShallow.
 func (ctx *Context) EvalDeep(src string) (*Expr, error) {
 	// This is a little silly, because eventually the Rust library converts
 	// the null-terminated C string into a length-delimited Rust string.

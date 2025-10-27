@@ -1,6 +1,7 @@
 package nickel
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -72,5 +73,21 @@ func TestMarshalJSON(t *testing.T) {
 	}
 	if target.Bar != 2 {
 		t.Fatalf("expected bar = 2")
+	}
+}
+
+func TestTrace(t *testing.T) {
+	var buf bytes.Buffer
+
+	ctx := NewContext()
+	ctx.SetTraceWriter(&buf)
+	_, err := ctx.EvalDeep("std.trace \"hi\" { bye = std.trace \"bye\" 1 }")
+	if err != nil {
+		t.Fatalf("eval error: %v", err)
+	}
+
+	traceOutput := buf.String()
+	if traceOutput != "std.trace: hi\nstd.trace: bye\n" {
+		t.Fatalf("unexpected buf contents: `%s`", traceOutput)
 	}
 }
