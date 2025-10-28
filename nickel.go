@@ -6,34 +6,14 @@ package nickel
 #cgo CFLAGS: -I./include
 
 #include <nickel_lang.h>
-#include <malloc.h>
-
-extern uintptr_t traceCallback(void*, uint8_t*, uintptr_t);
-
-uintptr_t traceCallbackTrampoline(void* context, const uint8_t* buf, uintptr_t len);
 */
 import "C"
 
 import (
 	"encoding/json"
-	"io"
 	"runtime"
-	"sync"
 	"unsafe"
 )
-
-var (
-	contextTracerMutex sync.RWMutex
-	contextTracer = map[unsafe.Pointer]io.Writer{}
-)
-
-// Context is the main entry point.
-//
-// It allows you to customize various aspects of the Nickel interpreter, such
-// as the path used to search for imported files.
-type Context struct {
-	ptr *C.nickel_context
-}
 
 // Expr is a Nickel expression.
 //
@@ -42,15 +22,6 @@ type Context struct {
 // boolean, a number, a string, an enum, a record, or an array.
 type Expr struct {
 	ptr *C.nickel_expr
-}
-
-// Record is a Nickel map or dictionary.
-//
-// Every key is a string and every value is an Expr, which may not have
-// been evaluated.
-type Record struct {
-	expr *Expr
-	ptr *C.nickel_record
 }
 
 // Error is a Nickel error message.
@@ -75,7 +46,7 @@ func (e *Error) Error() string {
 }
 
 func new_expr() *Expr {
-	expr := &Expr {
+	expr := &Expr{
 		ptr: C.nickel_expr_alloc(),
 	}
 
@@ -87,7 +58,7 @@ func new_expr() *Expr {
 }
 
 func new_err() *Error {
-	err := &Error {
+	err := &Error{
 		ptr: C.nickel_error_alloc(),
 	}
 
@@ -98,86 +69,158 @@ func new_err() *Error {
 	return err
 }
 
-// NewContext creates a new Context for storing global Nickel settings.
-func NewContext() *Context {
-	ctx := &Context {
-		ptr: C.nickel_context_alloc(),
-	}
-
-	runtime.SetFinalizer(ctx, func(ctx *Context) {
-		C.nickel_context_free(ctx.ptr)
-		delete(contextTracer, unsafe.Pointer(ctx.ptr))
-	})
-
-	return ctx
-}
-
-// The trace callback takes a (i.e. nickel_context*) as its data pointer. This should
-// be okay, lifetime-wise, because if the  nickel_context_free
-// and then no one should be able to trigger more trace callbacks coming from that context.
-
-//export traceCallback
-func traceCallback(data unsafe.Pointer, buf *C.uint8_t, len C.uintptr_t) C.uintptr_t {
-	bytes := C.GoBytes(unsafe.Pointer(buf), C.int(len))
-
-	contextTracerMutex.RLock()
-	w := contextTracer[data]
-	contextTracerMutex.RUnlock()
-
-	// Swallow the error if the write callback fails, since it's just for tracing.
-	n, _ := w.Write(bytes)
-	return C.uintptr_t(n)
-}
-
-func (ctx *Context) SetTraceWriter(w io.Writer) {
-	contextTracerMutex.Lock()
-	contextTracer[unsafe.Pointer(ctx.ptr)] = w
-	contextTracerMutex.Unlock()
-	C.nickel_context_set_trace_callback(ctx.ptr, C.nickel_write_callback(C.traceCallbackTrampoline), nil, unsafe.Pointer(ctx.ptr))
-}
-
-// EvalDeep evaluates a Nickel program deeply.
+// ToRecord converts an Expr to a native Go map, if the expression represented a Nickel record.
 //
-// "Deeply" means that we recursively evaluate records and arrays. For
-// an alternative, see EvalShallow.
-func (ctx *Context) EvalDeep(src string) (*Expr, error) {
-	// This is a little silly, because eventually the Rust library converts
-	// the null-terminated C string into a length-delimited Rust string.
-	// We could avoid some extra copying by having the C API work with
-	// length-delimited strings, but then it's a weird API for C users...
-	csrc := C.CString(src)
-	out_expr := new_expr()
-	out_err := new_err()
-	result := C.nickel_context_eval_deep(ctx.ptr, csrc, out_expr.ptr, out_err.ptr)
-	C.free(unsafe.Pointer(csrc))
-
-	if result == C.NICKEL_RESULT_OK {
-		return out_expr, nil
-	} else {
-		return nil, out_err
-	}
-}
-
-// ToRecord converts an Expr to a Record if it is one.
+// If the record was the result of lazy evaluation, it may have undefined
+// fields. In that case, the returned map will have keys whose values are nil.
 //
 // Returns nil, false if expr is not a Nickel record.
-func (expr *Expr) ToRecord() (*Record, bool) {
+func (expr *Expr) ToRecord() (map[string]*Expr, bool) {
 	if C.nickel_expr_is_record(expr.ptr) != 0 {
 		ptr := C.nickel_expr_as_record(expr.ptr)
-		return &Record {
-			ptr: ptr,
-			expr: expr,
-		}, true
+		len := C.nickel_record_len(ptr)
+		ret := make(map[string]*Expr)
+
+		for i := range len {
+			var key *C.char
+			var key_len C.uintptr_t
+			value := new_expr()
+
+			has_value := C.nickel_record_key_value_by_index(ptr, C.uintptr_t(i), &key, &key_len, value.ptr)
+			if has_value == 0 {
+				value = nil
+			}
+
+			key_string := C.GoStringN(key, C.int(key_len))
+			ret[key_string] = value
+		}
+
+		return ret, true
 	} else {
 		return nil, false
 	}
+}
+
+func (expr *Expr) ToArray() ([]*Expr, bool) {
+	if C.nickel_expr_is_array(expr.ptr) != 0 {
+		ptr := C.nickel_expr_as_array(expr.ptr)
+		len := C.nickel_array_len(ptr)
+		ret := make([]*Expr, len)
+
+		for i := range len {
+			value := new_expr()
+			C.nickel_array_get(ptr, i, value.ptr)
+			ret[i] = value
+		}
+		return ret, true
+	} else {
+		return nil, false
+	}
+}
+
+func (expr *Expr) ToBool() (bool, bool) {
+	if C.nickel_expr_is_bool(expr.ptr) != 0 {
+		b := C.nickel_expr_as_bool(expr.ptr) != 0
+		return b, true
+	} else {
+		return false, false
+	}
+}
+
+func (expr *Expr) ToFloat64() (float64, bool) {
+	if C.nickel_expr_is_number(expr.ptr) != 0 {
+		num := C.nickel_expr_as_number(expr.ptr)
+		x := C.nickel_number_as_f64(num)
+		return float64(x), true
+	} else {
+		return 0.0, false
+	}
+}
+
+func (expr *Expr) ToInt64() (int64, bool) {
+	if C.nickel_expr_is_number(expr.ptr) != 0 {
+		num := C.nickel_expr_as_number(expr.ptr)
+		if C.nickel_number_is_i64(num) != 0 {
+			x := C.nickel_number_as_i64(num)
+			return int64(x), true
+		}
+	}
+	return 0, false
+}
+
+func (expr *Expr) ToString() (string, bool) {
+	if C.nickel_expr_is_str(expr.ptr) != 0 {
+		var ptr *C.char
+		len := C.nickel_expr_as_str(expr.ptr, &ptr)
+		return C.GoStringN(ptr, (C.int)(len)), true
+	} else {
+		return "", false
+	}
+}
+
+func (expr *Expr) ToEnumTag() (string, bool) {
+	if C.nickel_expr_is_enum_tag(expr.ptr) != 0 {
+		var ptr *C.char
+		len := C.nickel_expr_as_enum_tag(expr.ptr, &ptr)
+		return C.GoStringN(ptr, (C.int)(len)), true
+	} else {
+		return "", false
+	}
+}
+
+func (expr *Expr) ToEnumVariant() (string, *Expr, bool) {
+	if C.nickel_expr_is_enum_variant(expr.ptr) != 0 {
+		var ptr *C.char
+		out_expr := new_expr()
+		len := C.nickel_expr_as_enum_variant(expr.ptr, &ptr, out_expr.ptr)
+		tag := C.GoStringN(ptr, (C.int)(len))
+		return tag, out_expr, true
+	} else {
+		return "", nil, false
+	}
+}
+
+func (expr *Expr) IsRecord() bool {
+	return C.nickel_expr_is_record(expr.ptr) != 0
+}
+
+func (expr *Expr) IsArray() bool {
+	return C.nickel_expr_is_array(expr.ptr) != 0
+}
+
+func (expr *Expr) IsBool() bool {
+	return C.nickel_expr_is_bool(expr.ptr) != 0
+}
+
+func (expr *Expr) IsNumber() bool {
+	return C.nickel_expr_is_number(expr.ptr) != 0
+}
+
+func (expr *Expr) IsString() bool {
+	return C.nickel_expr_is_str(expr.ptr) != 0
+}
+
+func (expr *Expr) IsEnumTag() bool {
+	return C.nickel_expr_is_enum_tag(expr.ptr) != 0
+}
+
+func (expr *Expr) IsEnumVariant() bool {
+	return C.nickel_expr_is_enum_variant(expr.ptr) != 0
+}
+
+func (expr *Expr) IsValue() bool {
+	return C.nickel_expr_is_value(expr.ptr) != 0
+}
+
+func (expr *Expr) IsNull() bool {
+	return C.nickel_expr_is_null(expr.ptr) != 0
 }
 
 func (expr *Expr) MarshalJSON() ([]byte, error) {
 	out_err := new_err()
 	out_string := C.nickel_string_alloc()
 	defer C.nickel_string_free(out_string)
-	
+
 	result := C.nickel_expr_to_json(expr.ptr, out_string, out_err.ptr)
 	if result == C.NICKEL_RESULT_ERR {
 		return nil, out_err
@@ -191,7 +234,7 @@ func (expr *Expr) MarshalJSON() ([]byte, error) {
 		borrowedSlice := unsafe.Slice((*byte)(unsafe.Pointer(bytes)), int(len))
 		slice := make([]byte, int(len))
 		copy(slice, borrowedSlice)
-		
+
 		return slice, nil
 	}
 }
@@ -204,29 +247,4 @@ func (expr *Expr) ConvertTo(target interface{}) error {
 	}
 
 	return json.Unmarshal(data, target)
-}
-
-// Elements retrieves all of the record's elements, as a map.
-//
-// If the record was the result of lazy evaluation, it may have undefined
-// fields. In that case, the returned map will have keys whose values are nil.
-func (record *Record) Elements() map[string]*Expr {
-	len := C.nickel_record_len(record.ptr)
-	ret := make(map[string]*Expr)
-
-	for i := C.uintptr_t(0); i < len; i++ {
-		var key *C.char
-		var key_len C.uintptr_t
-		value := new_expr()
-
-		has_value := C.nickel_record_key_value_by_index(record.ptr, C.uintptr_t(i), &key, &key_len, value.ptr)
-		if has_value == 0 {
-			value = nil
-		}
-
-		key_string := C.GoStringN(key, C.int(key_len))
-		ret[key_string] = value
-	}
-
-	return ret
 }
