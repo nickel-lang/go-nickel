@@ -17,8 +17,8 @@ import (
 
 // Expr is a Nickel expression.
 //
-// Since Nickel is lazy, it may not yet have been evaluated (TODO: link to the
-// lazy eval once that's bound). If it has been evaluated, it could be null, a
+// Since Nickel is lazy, it may not yet have been evaluated (see Context.EvalShallow for
+// more on lazy evaluation). If it has been evaluated, it could be null, a
 // boolean, a number, a string, an enum, a record, or an array.
 type Expr struct {
 	ptr *C.nickel_expr
@@ -73,8 +73,6 @@ func new_err() *Error {
 //
 // If the record was the result of lazy evaluation, it may have undefined
 // fields. In that case, the returned map will have keys whose values are nil.
-//
-// Returns nil, false if expr is not a Nickel record.
 func (expr *Expr) ToRecord() (map[string]*Expr, bool) {
 	if C.nickel_expr_is_record(expr.ptr) != 0 {
 		ptr := C.nickel_expr_as_record(expr.ptr)
@@ -101,6 +99,10 @@ func (expr *Expr) ToRecord() (map[string]*Expr, bool) {
 	}
 }
 
+// ToArray converts an Expr to a native Go array, if the expression represented a Nickel array.
+//
+// If the expression was shallowly evaluated, some of the elements of the returned array may
+// not have been evaluated yet.
 func (expr *Expr) ToArray() ([]*Expr, bool) {
 	if C.nickel_expr_is_array(expr.ptr) != 0 {
 		ptr := C.nickel_expr_as_array(expr.ptr)
@@ -118,6 +120,7 @@ func (expr *Expr) ToArray() ([]*Expr, bool) {
 	}
 }
 
+// ToBool converts an Expr into a bool, if the expression represented a Nickel bool.
 func (expr *Expr) ToBool() (bool, bool) {
 	if C.nickel_expr_is_bool(expr.ptr) != 0 {
 		b := C.nickel_expr_as_bool(expr.ptr) != 0
@@ -127,6 +130,9 @@ func (expr *Expr) ToBool() (bool, bool) {
 	}
 }
 
+// ToFloat64 converts an Expr into a float64, if the expression represented a Nickel number.
+//
+// The conversion from Nickel number to a float64 may involve rounding.
 func (expr *Expr) ToFloat64() (float64, bool) {
 	if C.nickel_expr_is_number(expr.ptr) != 0 {
 		num := C.nickel_expr_as_number(expr.ptr)
@@ -137,6 +143,11 @@ func (expr *Expr) ToFloat64() (float64, bool) {
 	}
 }
 
+// ToInt64 converts an Expr into an int64, if the expression represented a Nickel number
+// that fits in an int64.
+//
+// This conversion will fail if the expression is a Nickel number that doesn't fit in
+// an int64, either because it is too large or not an integer.
 func (expr *Expr) ToInt64() (int64, bool) {
 	if C.nickel_expr_is_number(expr.ptr) != 0 {
 		num := C.nickel_expr_as_number(expr.ptr)
@@ -148,6 +159,7 @@ func (expr *Expr) ToInt64() (int64, bool) {
 	return 0, false
 }
 
+// ToString converts an Expr into a string, if the expression represented a Nickel string.
 func (expr *Expr) ToString() (string, bool) {
 	if C.nickel_expr_is_str(expr.ptr) != 0 {
 		var ptr *C.char
@@ -158,6 +170,7 @@ func (expr *Expr) ToString() (string, bool) {
 	}
 }
 
+// ToEnumTag converts an Expr into a string, if the expression represented a Nickel enum tag.
 func (expr *Expr) ToEnumTag() (string, bool) {
 	if C.nickel_expr_is_enum_tag(expr.ptr) != 0 {
 		var ptr *C.char
@@ -168,6 +181,11 @@ func (expr *Expr) ToEnumTag() (string, bool) {
 	}
 }
 
+// ToEnumVariant converts an Expr into a tag and a payload, if the expression represented
+// a Nickel enum variant.
+//
+// If the expression was shallowly evaluated, the payload may
+// not have been evaluated yet.
 func (expr *Expr) ToEnumVariant() (string, *Expr, bool) {
 	if C.nickel_expr_is_enum_variant(expr.ptr) != 0 {
 		var ptr *C.char
@@ -216,6 +234,7 @@ func (expr *Expr) IsNull() bool {
 	return C.nickel_expr_is_null(expr.ptr) != 0
 }
 
+// MarshalJSON implements the json.Marshaler interface for Expr.
 func (expr *Expr) MarshalJSON() ([]byte, error) {
 	out_err := new_err()
 	out_string := C.nickel_string_alloc()

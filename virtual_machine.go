@@ -28,7 +28,7 @@ func new_vm() *VirtualMachine {
 	return vm
 }
 
-// EvalShallow evaluates an expression shallowly, to weak head normal form (WHNF).
+// EvalShallow evaluates an expression shallowly.
 //
 // This has no effect if the expression is already evaluated.
 //
