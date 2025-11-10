@@ -96,11 +96,6 @@ typedef struct nickel_record nickel_record;
 typedef struct nickel_string nickel_string;
 
 /**
- * A Nickel virtual machine, which can be used for evaluating partially-evaluated expressions.
- */
-typedef struct nickel_virtual_machine nickel_virtual_machine;
-
-/**
  * A callback function for writing data.
  *
  * This function will be called with a buffer (`buf`) of data, having length
@@ -206,30 +201,23 @@ nickel_result nickel_context_eval_deep_for_export(nickel_context *ctx,
  * variant, the payload (record values, array elements, or enum
  * payloads) will be left unevaluated.
  *
- * Together with the expression, this returns a Nickel virtual machine that
- * can be used to further evaluate unevaluated sub-expressions.
+ * Sub-expressions of the result can be evaluated further by [nickel_context_eval_expr_shallow].
  *
  * - `src` is a null-terminated string containing UTF-8-encoded Nickel source.
  * - `out_expr` is either NULL or something that was created with [`nickel_expr_alloc`]
  * - `out_error` can be NULL if you aren't interested in getting detailed
  *   error messages
- * - `out_virtual_machine` is either NULL or something that was created
- *   with [`nickel_virtual_machine_alloc`]
  *
- * If evaluation is successful, returns `NICKEL_RESULT_OK` and replaces
- * the value at `out_expr` (if non-NULL) with the newly-evaluated Nickel expression,
- * and the value at `out_virtual_machine` (if non-NULL) with a virtual machine
- * that can be used for further evaluation.
+ * If evaluation is successful, returns `NICKEL_RESULT_OK` and replaces the value at `out_expr`
+ * (if non-NULL) with the newly-evaluated Nickel expression.
  *
- * If evaluation fails, returns `NICKEL_RESULT_ERR` and replaces the
- * value at `out_error` (if non-NULL) by a pointer to a newly-allocated Nickel error.
- * That error should be freed with `nickel_error_free` when you are
- * done with it.
+ * If evaluation fails, returns `NICKEL_RESULT_ERR` and replaces the value at `out_error` (if
+ * non-NULL) by a pointer to a newly-allocated Nickel error. That error should be freed with
+ * `nickel_error_free` when you are done with it.
  */
 nickel_result nickel_context_eval_shallow(nickel_context *ctx,
                                           const char *src,
                                           nickel_expr *out_expr,
-                                          nickel_virtual_machine *out_virtual_machine,
                                           nickel_error *out_error);
 
 /**
@@ -336,11 +324,10 @@ int nickel_expr_is_array(const nickel_expr *expr);
 /**
  * Has this expression been evaluated?
  *
- * An evaluated expression is either null, or it's a number, bool, string,
- * record, array, or enum. If this expression is not a value, you probably
- * got it from looking inside the result of [`nickel_context_eval_shallow`],
- * and you can use the [`VirtualMachine`] you got from
- * `nickel_context_eval_shallow` to evaluate this expression further.
+ * An evaluated expression is either null, or it's a number, bool, string, record, array, or enum.
+ * If this expression is not a value, you probably got it from looking inside the result of
+ * [`nickel_context_eval_shallow`], and you can use the [`nickel_context_eval_expr_shallow`] to
+ * evaluate this expression further.
  */
 int nickel_expr_is_value(const nickel_expr *expr);
 
@@ -445,37 +432,40 @@ const nickel_record *nickel_expr_as_record(const nickel_expr *expr);
 const nickel_array *nickel_expr_as_array(const nickel_expr *expr);
 
 /**
- * Convert this expression to JSON.
+ * Converts an expression to JSON.
  *
  * This is fallible because enum variants have no canonical conversion to
  * JSON: if the expression contains any enum variants, this will fail.
  * This also fails if the expression contains any unevaluated sub-expressions.
  */
-nickel_result nickel_expr_to_json(const nickel_expr *expr,
-                                  nickel_string *out_string,
-                                  nickel_error *out_err);
+nickel_result nickel_context_expr_to_json(nickel_context *ctx,
+                                          const nickel_expr *expr,
+                                          nickel_string *out_string,
+                                          nickel_error *out_err);
 
 /**
- * Convert this expression to YAML.
+ * Converts an expression to YAML.
  *
  * This is fallible because enum variants have no canonical conversion to
  * YAML: if the expression contains any enum variants, this will fail.
  * This also fails if the expression contains any unevaluated sub-expressions.
  */
-nickel_result nickel_expr_to_yaml(const nickel_expr *expr,
-                                  nickel_string *out_string,
-                                  nickel_error *out_err);
+nickel_result nickel_context_expr_to_yaml(nickel_context *ctx,
+                                          const nickel_expr *expr,
+                                          nickel_string *out_string,
+                                          nickel_error *out_err);
 
 /**
- * Convert this expression to TOML.
+ * Converts an expression to TOML.
  *
  * This is fallible because enum variants have no canonical conversion to
  * TOML: if the expression contains any enum variants, this will fail.
  * This also fails if the expression contains any unevaluated sub-expressions.
  */
-nickel_result nickel_expr_to_toml(const nickel_expr *expr,
-                                  nickel_string *out_string,
-                                  nickel_error *out_err);
+nickel_result nickel_context_expr_to_toml(nickel_context *ctx,
+                                          const nickel_expr *expr,
+                                          nickel_string *out_string,
+                                          nickel_error *out_err);
 
 /**
  * Is this number an integer within the range of an `int64_t`?
@@ -583,18 +573,6 @@ void nickel_string_free(nickel_string *s);
 void nickel_string_data(const nickel_string *s, const char **data, uintptr_t *len);
 
 /**
- * Allocate space for a virtual machine.
- *
- * The virtual machine can be initialized by `nickel_context_eval_shallow`.
- */
-nickel_virtual_machine *nickel_virtual_machine_alloc(void);
-
-/**
- * Free a virtual machine.
- */
-void nickel_virtual_machine_free(nickel_virtual_machine *vm);
-
-/**
  * Evaluate an expression to weak head normal form (WHNF).
  *
  * This has no effect if the expression is already evaluated (see
@@ -605,10 +583,10 @@ void nickel_virtual_machine_free(nickel_virtual_machine *vm);
  * variant, the payload (record values, array elements, or enum
  * payloads) will be left unevaluated.
  */
-nickel_result nickel_virtual_machine_eval_shallow(nickel_virtual_machine *vm,
-                                                  const nickel_expr *expr,
-                                                  nickel_expr *out_expr,
-                                                  nickel_error *out_error);
+nickel_result nickel_context_eval_expr_shallow(nickel_context *ctx,
+                                               const nickel_expr *expr,
+                                               nickel_expr *out_expr,
+                                               nickel_error *out_error);
 
 /**
  * Allocate a new `nickel_error`.

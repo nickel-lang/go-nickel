@@ -30,6 +30,7 @@
         devShells.${system}.default = pkgs.mkShell {
           packages = with pkgs; [
             go
+            gopls
           ];
           NICKEL_LIB=inputs.nickel.packages.${system}.nickel-lang-c;
         };

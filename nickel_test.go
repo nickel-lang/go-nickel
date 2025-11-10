@@ -18,11 +18,9 @@ func TestRecord(t *testing.T) {
 		t.Fatal("not a record")
 	}
 
-	// FIXME: IsValue isn't working as I expect. This seems like a problem on
-	// the rust side
-	// if !expr.IsValue() {
-	// 	t.Fatal("not a value")
-	// }
+	if !expr.IsValue() {
+		t.Fatal("not a value")
+	}
 
 	record, ok := expr.ToRecord()
 	if !ok {
@@ -73,7 +71,7 @@ func TestArray(t *testing.T) {
 
 func TestLazyInspection(t *testing.T) {
 	ctx := NewContext()
-	expr, vm, err := ctx.EvalShallow("{ foo = [1, 2 + 3], bar = \"hi\", baz = 'Tag (1 + 1) }")
+	expr, err := ctx.EvalShallow("{ foo = [1, 2 + 3], bar = \"hi\", baz = 'Tag (1 + 1) }")
 
 	if err != nil {
 		t.Fatalf("eval error: %v", err)
@@ -90,7 +88,7 @@ func TestLazyInspection(t *testing.T) {
 	if record["foo"].IsValue() {
 		t.Fatal("expected a lazy foo")
 	}
-	foo, err := vm.EvalShallow(record["foo"])
+	foo, err := record["foo"].EvalShallow()
 	if err != nil {
 		t.Fatalf("eval error: %v", err)
 	}
@@ -113,7 +111,7 @@ func TestLazyInspection(t *testing.T) {
 	if ok {
 		t.Fatal("expected a lazy")
 	}
-	eltExpr, err := vm.EvalShallow(fooArr[1])
+	eltExpr, err := fooArr[1].EvalShallow()
 	if err != nil {
 		t.Fatalf("eval error: %v", err)
 	}
@@ -206,5 +204,19 @@ func TestTrace(t *testing.T) {
 	traceOutput := buf.String()
 	if traceOutput != "std.trace: hi\nstd.trace: bye\n" {
 		t.Fatalf("unexpected buf contents: `%s`", traceOutput)
+	}
+}
+
+func TestErrorFormat(t *testing.T) {
+	ctx := NewContext()
+	_, err := ctx.EvalDeep("{ port | Number = \"80\", name = \"myserver\" }")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "contract broken by the value of `port`") {
+		t.Fatalf("unexpected message: %s\n", msg)
+
 	}
 }

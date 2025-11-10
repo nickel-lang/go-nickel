@@ -22,6 +22,13 @@ import (
 // boolean, a number, a string, an enum, a record, or an array.
 type Expr struct {
 	ptr *C.nickel_expr
+	// An Expr keeps a reference to the context that created it. This is a departure
+	// from the C API, which makes you keep them both around, but it makes the
+	// JSON conversion API and lazy eval APIs a bit nicer. (For example, without
+	// keeping the context around, Expr can't implement the MarshalJSON interface on
+	// its own.) The cost of this is that the context will stay alive longer than
+	// strictly needed. But it isn't too big.
+	ctx *Context
 }
 
 // Error is a Nickel error message.
@@ -45,9 +52,10 @@ func (e *Error) Error() string {
 	}
 }
 
-func new_expr() *Expr {
+func new_expr(ctx *Context) *Expr {
 	expr := &Expr{
 		ptr: C.nickel_expr_alloc(),
+		ctx: ctx,
 	}
 
 	runtime.SetFinalizer(expr, func(expr *Expr) {
@@ -69,6 +77,26 @@ func new_err() *Error {
 	return err
 }
 
+// EvalShallow evaluates an unevaluated expression a little bit more.
+//
+// This has no effect if the expression is already evaluated.
+//
+// The result of this evaluation is a null, bool, number, string,
+// enum, record, or array. In case it's a record, array, or enum
+// variant, the payload (record values, array elements, or enum
+// payloads) will be left unevaluated.
+func (expr *Expr) EvalShallow() (*Expr, error) {
+	out_expr := new_expr(expr.ctx)
+	out_err := new_err()
+
+	result := C.nickel_context_eval_expr_shallow(expr.ctx.ptr, expr.ptr, out_expr.ptr, out_err.ptr)
+	if result == C.NICKEL_RESULT_OK {
+		return out_expr, nil
+	} else {
+		return nil, out_err
+	}
+}
+
 // ToRecord converts an Expr to a native Go map, if the expression represented a Nickel record.
 //
 // If the record was the result of lazy evaluation, it may have undefined
@@ -82,7 +110,7 @@ func (expr *Expr) ToRecord() (map[string]*Expr, bool) {
 		for i := range len {
 			var key *C.char
 			var key_len C.uintptr_t
-			value := new_expr()
+			value := new_expr(expr.ctx)
 
 			has_value := C.nickel_record_key_value_by_index(ptr, C.uintptr_t(i), &key, &key_len, value.ptr)
 			if has_value == 0 {
@@ -110,7 +138,7 @@ func (expr *Expr) ToArray() ([]*Expr, bool) {
 		ret := make([]*Expr, len)
 
 		for i := range len {
-			value := new_expr()
+			value := new_expr(expr.ctx)
 			C.nickel_array_get(ptr, i, value.ptr)
 			ret[i] = value
 		}
@@ -189,7 +217,7 @@ func (expr *Expr) ToEnumTag() (string, bool) {
 func (expr *Expr) ToEnumVariant() (string, *Expr, bool) {
 	if C.nickel_expr_is_enum_variant(expr.ptr) != 0 {
 		var ptr *C.char
-		out_expr := new_expr()
+		out_expr := new_expr(expr.ctx)
 		len := C.nickel_expr_as_enum_variant(expr.ptr, &ptr, out_expr.ptr)
 		tag := C.GoStringN(ptr, (C.int)(len))
 		return tag, out_expr, true
@@ -240,7 +268,7 @@ func (expr *Expr) MarshalJSON() ([]byte, error) {
 	out_string := C.nickel_string_alloc()
 	defer C.nickel_string_free(out_string)
 
-	result := C.nickel_expr_to_json(expr.ptr, out_string, out_err.ptr)
+	result := C.nickel_context_expr_to_json(expr.ctx.ptr, expr.ptr, out_string, out_err.ptr)
 	if result == C.NICKEL_RESULT_ERR {
 		return nil, out_err
 	} else {
@@ -259,7 +287,7 @@ func (expr *Expr) MarshalJSON() ([]byte, error) {
 }
 
 // ConvertTo converts an Expr to anything that can be unmarshaled from JSON.
-func (expr *Expr) ConvertTo(target interface{}) error {
+func (expr *Expr) ConvertTo(target any) error {
 	data, err := expr.MarshalJSON()
 	if err != nil {
 		return err

@@ -84,7 +84,7 @@ func (ctx *Context) EvalDeep(src string) (*Expr, error) {
 	// We could avoid some extra copying by having the C API work with
 	// length-delimited strings, but then it's a weird API for C users...
 	csrc := C.CString(src)
-	out_expr := new_expr()
+	out_expr := new_expr(ctx)
 	out_err := new_err()
 	result := C.nickel_context_eval_deep(ctx.ptr, csrc, out_expr.ptr, out_err.ptr)
 	C.free(unsafe.Pointer(csrc))
@@ -102,20 +102,16 @@ func (ctx *Context) EvalDeep(src string) (*Expr, error) {
 // enum, record, or array. In case it's a record, array, or enum
 // variant, the payload (record values, array elements, or enum
 // payloads) will be left unevaluated.
-//
-// Together with the expression, this returns a Nickel virtual machine that
-// can be used to further evaluate unevaluated sub-expressions.
-func (ctx *Context) EvalShallow(src string) (*Expr, *VirtualMachine, error) {
+func (ctx *Context) EvalShallow(src string) (*Expr, error) {
 	csrc := C.CString(src)
-	out_expr := new_expr()
+	out_expr := new_expr(ctx)
 	out_err := new_err()
-	out_vm := new_vm()
-	result := C.nickel_context_eval_shallow(ctx.ptr, csrc, out_expr.ptr, out_vm.ptr, out_err.ptr)
+	result := C.nickel_context_eval_shallow(ctx.ptr, csrc, out_expr.ptr, out_err.ptr)
 	C.free(unsafe.Pointer(csrc))
 
 	if result == C.NICKEL_RESULT_OK {
-		return out_expr, out_vm, nil
+		return out_expr, nil
 	} else {
-		return nil, nil, out_err
+		return nil, out_err
 	}
 }
