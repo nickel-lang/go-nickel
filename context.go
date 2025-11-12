@@ -4,7 +4,7 @@ package nickel
 #cgo CFLAGS: -I./include
 
 #include <nickel_lang.h>
-#include <malloc.h>
+#include <stdlib.h>
 
 extern uintptr_t traceCallback(void*, uint8_t*, uintptr_t);
 
