@@ -11,9 +11,7 @@ Add Nickel bindings to your project using `go get`:
 go get github.com/nickel-lang/go-nickel@main
 ```
 
-(You need to use `main` because we haven't had any releases yet.
-Also, bindings are only available for linux amd64 so far. This
-will change soon.)
+(You need to use `main` because we haven't had any releases yet.)
 
 Then you can evaluate Nickel strings from within your go code:
 
